@@ -1,0 +1,83 @@
+<!doctype html>
+<html>
+<head>
+    <title>Statistiques de l'utilisation des batteries</title>
+    <link rel="stylesheet" href="/dygraph.css">
+    <link rel="icon" type="image/svg+xml" href="/images/favicon.ico">
+    <style>
+        .dygraphChart {
+            min-width: 100%;
+            min-height: 500px;
+        }
+    </style>
+</head>
+<body>
+<div id="graph" class="dygraphChart"></div>
+<p>
+    <label for="startdate">Begin date:</label><input type="date" id="startdate">
+</p>
+<p>
+    <label for="stopdate">End date:</label><input type="date" id="stopdate">
+</p>
+<p>
+    <label for="modulo">Modulo:</label><input type="number" id="modulo">
+</p>
+<p>
+    <label for="data">Data</label>
+    <select name="data" id="data">
+        <option value="charge">Charge des batteries</option>
+        <option value="tension_bat">Tension des batteries</option>
+        <option value="tension_pv1">Tension du panneau 1</option>
+        <option value="tension_pv2">Tension du panneau 2</option>
+        <option value="temperature">Temperature des batteries</option>
+        <option value="courant_pv1">Courant du panneau 1</option>
+        <option value="courant_pv2">Courant du panneau 2</option>
+        <option value="entree_energie_24h">Entree d'&eacute;nergie sur 24h</option>
+        <option value="sortie_energie_24h">Sortie d'&eacute;nergie sur 24h</option>
+        <option value="courant_entree_appareil">Courant d'entr&eacute;e sur l'appareil</option>
+        <option value="courant_charge_total">Courant de charge total</option>
+        <option value="courant_consommateur">Courant du consommateur</option>
+        <option value="courant_decharge_total">Courant de d&eacute;charge total</option>
+    </select>
+</p>
+<p>
+    <button onclick="updateGraph();">Valider</button>
+</p>
+</body>
+<script type="text/javascript" src="/dygraph.min.js"></script>
+<script>
+    var htmlgraph = document.getElementById('graph');
+    var g = new Dygraph(htmlgraph, "/data", {
+        legend: 'always',
+        title: '&Eacute;tat des batteries',
+        showRoller: true,
+        rollPeriod: 1,
+        customBars: false,
+        labels: ["Date", "Charge (%)"]
+    });
+
+    var startDateHTML = document.getElementById('startdate'), stopDateHTML = document.getElementById('stopdate'),
+        moduloHTML = document.getElementById('modulo'), dataHTML = document.getElementById('data');
+
+    function updateGraph() {
+        let uri_params = "";
+        if (dataHTML.value.length !== 0) {
+            uri_params += "data=" + dataHTML.value + "&"
+        }
+        if (moduloHTML.value.length !== 0) {
+            uri_params += "modulo=" + moduloHTML.value + "&"
+        }
+        if (startDateHTML.value.length !== 0) {
+            uri_params += "startdate=" + startDateHTML.value + "&"
+        }
+        if (stopDateHTML.value.length !== 0) {
+            uri_params += "stopdate=" + stopDateHTML.value
+        }
+        g.updateOptions({
+            'file': "/data?" + uri_params,
+            'labels': ["Date", dataHTML.options[dataHTML.selectedIndex].text]
+        });
+    }
+
+</script>
+</html>

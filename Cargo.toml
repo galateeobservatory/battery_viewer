@@ -1,0 +1,10 @@
+[package]
+name = "battery_viewer"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rocket = "0.5"
+dotenv = "0.15"
+sqlx = { version = "0.8", features = ["postgres", "chrono", "runtime-async-std"] }
+serde = "1.0"
