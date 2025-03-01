@@ -1,13 +1,17 @@
 #[macro_use]
 extern crate rocket;
 
-use rocket::response::content::{RawCss, RawHtml, RawJavaScript, RawText};
+use rocket::response::content::{RawCss, RawHtml, RawJavaScript};
 use rocket::serde::{Deserialize, Serialize};
 use rocket::State;
 use sqlx::types::chrono::{NaiveDate, NaiveDateTime};
 use sqlx::{PgPool, Row};
 use std::env;
+use rocket::futures::StreamExt;
 use rocket::response::stream::TextStream;
+use std::string::String;
+use std::sync::mpsc;
+use std::sync::mpsc::{Receiver, Sender};
 
 const INDEX_HTML: &'static str = include_str!("../static/index.html");
 const DYGRAPH_JS: &'static str = include_str!("../static/dygraph.min.js");
@@ -28,6 +32,11 @@ const ALLOWED_QUERY_COL: [&'static str; 13] = [
     "courant_decharge_total",
 ];
 
+const DEFAULT_REQUESTED_DATA: &'static str = "charge";
+const DEFAULT_MODULO: i32 = 10i32;
+const DEFAULT_START_DATE: &'static str = "2024-01-01";
+const DEFAULT_STOP_DATE: &'static str = "3000-01-01";
+
 #[get("/")]
 fn index() -> RawHtml<&'static str> {
     RawHtml(INDEX_HTML)
@@ -45,13 +54,13 @@ fn dygraph_css() -> RawCss<&'static str> {
 
 #[derive(Serialize, Deserialize, FromForm)]
 struct QueryParams {
-    #[field(name = "data", default = "charge")]
+    #[field(name = "data", default = DEFAULT_REQUESTED_DATA)]
     data: String,
-    #[field(name = "modulo", default = 10i32)]
+    #[field(name = "modulo", default = DEFAULT_MODULO)]
     modulo: i32,
-    #[field(name = "startdate", default = "2000-01-01")]
+    #[field(name = "startdate", default = DEFAULT_START_DATE)]
     startdate: String,
-    #[field(name = "stopdate", default = "3000-01-01")]
+    #[field(name = "stopdate", default = DEFAULT_STOP_DATE)]
     stopdate: String,
 }
 
@@ -59,14 +68,16 @@ struct QueryParams {
 async fn data(
     pool: &State<PgPool>,
     params: QueryParams,
-) -> Result<RawText<String>, rocket::http::Status> {
+) -> Result<TextStream![String], rocket::http::Status> {
     let data_column = params.data;
     if !ALLOWED_QUERY_COL.contains(&data_column.as_str()) {
         // avoid SQL injection
         return Err(rocket::http::Status::BadRequest);
     }
 
-    let query_str = format!("SELECT servdate, {} FROM battery WHERE id % $1 = 0 AND erreur_crc16 = FALSE AND servdate >= $2 AND servdate <= $3 ORDER BY id ASC;", data_column);
+    let query_str = format!("SELECT servdate, {} FROM battery WHERE id % $1 = 0 AND erreur_crc16 = FALSE AND servdate >= $2 AND servdate <= $3 ORDER BY id ASC;",
+                            data_column
+    );
 
     let start_date = NaiveDate::parse_from_str(params.startdate.as_str(), "%Y-%m-%d")
         .map_err(|_| rocket::http::Status::BadRequest)?;
@@ -74,36 +85,39 @@ async fn data(
     let stop_date = NaiveDate::parse_from_str(params.stopdate.as_str(), "%Y-%m-%d")
         .map_err(|_| rocket::http::Status::BadRequest)?;
 
-    let rows = sqlx::query(&query_str)
+    let mut rows = sqlx::query(query_str.as_str())
         .bind(params.modulo)
         .bind(start_date)
         .bind(stop_date)
-        .fetch_all(pool.inner())
-        .await
-        .map_err(|_| rocket::http::Status::InternalServerError)?;
+        .fetch(pool.inner());
 
-    let mut csv_output = String::new();
+    let (tx, rx): (Sender<String>, Receiver<String>) = mpsc::channel();
 
-    for row in rows {
-        let servdate: NaiveDateTime = row
-            .try_get("servdate")
-            .map_err(|_| rocket::http::Status::InternalServerError)?;
-        let data_value: Option<f32> = row
-            .try_get(data_column.as_str())
-            .map_err(|_| rocket::http::Status::InternalServerError)?;
-        csv_output.push_str(&format!(
+    while let Some(row) = rows.next().await {
+        let row = match row {
+            Ok(row) => row,
+            Err(_) => continue,
+        };
+        let servdate: NaiveDateTime = match row.try_get("servdate") {
+            Ok(servdate) => servdate,
+            Err(_) => continue,
+        };
+        let data_value: Option<f32> = match row.try_get(data_column.as_str()){
+            Ok(data_value) => data_value,
+            Err(_) => continue,
+        };
+        let _ = tx.send(format!(
             "{},{}\n",
             servdate.format("%Y-%m-%d %H:%M:%S"),
             data_value.unwrap_or(f32::NAN)
         ));
-        /*yield format!(
-               "{},{}\n",
-               servdate.format("%Y-%m-%d %H:%M:%S"),
-               data_value.unwrap_or(f32::NAN)
-           );*/
     }
 
-    Ok(RawText(csv_output))
+    Ok(TextStream! {
+        while let Ok(row) = rx.recv() {
+            yield row;
+        }
+    })
 }
 
 #[rocket::main]
